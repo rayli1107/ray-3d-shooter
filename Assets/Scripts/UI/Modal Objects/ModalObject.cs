@@ -26,5 +26,8 @@ public class ModalObject : MonoBehaviour
 
     }
 
-
+    public virtual void OnCancel()
+    {
+        gameObject.SetActive(false);
+    }
 }

@@ -1,3 +1,4 @@
+using Photon.Pun;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -74,11 +75,12 @@ public class WeaponController : MonoBehaviour
             return;
         }
 
-        BulletManager.Instance.SpawnBulletRpc(
-            NetworkManager.Singleton.LocalClientId,
-            _barrel.transform.position,
-            direction,
-            _bulletDamage);
+        GameObject bulletObject = PhotonNetwork.Instantiate(
+            "Bullet", _barrel.transform.position, Quaternion.identity);
+        BulletController bulletController = bulletObject.GetComponent<BulletController>();
+        bulletController.direction = direction;
+        bulletController.sourcePlayerClientId = sourcePlayer.playerId;
+        bulletController.damage = _bulletDamage;
 
         if (_animator != null) {
             _animatorReadyState = _animator.GetCurrentAnimatorStateInfo(0).shortNameHash;

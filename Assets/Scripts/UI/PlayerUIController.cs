@@ -1,13 +1,20 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
 public class PlayerUIController : MonoBehaviour
 {
     [SerializeField]
+    private Canvas _canvas;
+
+    [SerializeField]
     private Slider _sliderHP;
 
     [SerializeField]
     private Image _imageTarget;
+
+    [SerializeField]
+    private TextMeshProUGUI _labelCoordinates;
 
     public bool IsTarget
     {
@@ -24,26 +31,34 @@ public class PlayerUIController : MonoBehaviour
 
     private void OnEnable()
     {
-        _player.playerData.OnValueChanged += onPlayerDataValueChange;
-        onPlayerDataValueChange(null, _player.playerData.Value);
+        _player.statUpdateAction += onPlayerDataValueChange;
+        onPlayerDataValueChange();
+        InvokeRepeating(nameof(updateLocation), 0, 0.1f);
     }
 
     private void OnDisable()
     {
-        _player.playerData.OnValueChanged -= onPlayerDataValueChange;
+        CancelInvoke(nameof(updateLocation));
+        _player.statUpdateAction -= onPlayerDataValueChange;
     }
 
-    private void onPlayerDataValueChange(PlayerData _, PlayerData playerData)
+    private void onPlayerDataValueChange()
     {
-        if (playerData != null)
-        {
-            _sliderHP.maxValue = playerData.maxHP;
-            _sliderHP.value = playerData.currentHP;
-        }
+        _sliderHP.maxValue = _player.maxHP;
+        _sliderHP.value = _player.HP;
     }
 
-    // Update is called once per frame
-    void Update()
+    private void updateLocation()
     {
+        _labelCoordinates.text = string.Format(
+            "{0}: {1:0.00}, {2:0.00}",
+            _player.playerName,
+            transform.position.x,
+            transform.position.z);
+    }
+
+    private void Update()
+    {
+        _canvas.transform.LookAt(GameController.Instance.cameraThirdPerson.transform);
     }
 }

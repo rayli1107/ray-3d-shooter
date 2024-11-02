@@ -1,9 +1,12 @@
 using Cinemachine;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using Unity.Netcode;
+using Photon.Pun;
+using System;
+using ExitGames.Client.Photon;
+using Photon.Realtime;
 
-public class PlayerData : INetworkSerializable
+/*public class PlayerData : INetworkSerializable
 {
     private int _maxHP;
     public int maxHP
@@ -52,28 +55,55 @@ public class PlayerData : INetworkSerializable
         }
     }
 }
+*/
+
+public class PhotonNetworkVariable
+{
+    public Action updateAction;
+    private PlayerController _playerController;
+    public bool isMine => _playerController.isMine;
+    public static string actorId = "ActorId";
+    public string key { get; private set; }
+    private object _value;
+    public object value
+    {
+        get => _value;
+        set
+        {
+            if (_value != value)
+            {
+                _value = value;
+                updateAction?.Invoke();
+            }
+        }
+    }
+
+    public PhotonNetworkVariable(string key, object value, Action updateAction, PlayerController playerController)
+    {
+        this.updateAction = updateAction;
+        this.key = key;
+        _playerController = playerController;
+        _value = value;
+    }
+}
 
 [RequireComponent(typeof(CharacterController), typeof(PlayerInput))]
-public class PlayerController : NetworkBehaviour
+public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
 {
     [SerializeField]
-    private CinemachineVirtualCamera _cameraThirdPerson;
-    [SerializeField]
-    private CinemachineVirtualCamera _cameraAim;
-    [SerializeField]
     private Animator _animator;
-    [SerializeField]
-    private Transform _rotationTransform;
+    [field: SerializeField]
+    public Transform rotationTransform { get; private set; }
     [SerializeField]
     private float _playerWalkSpeed = 4.0f;
     [SerializeField]
     private float _playerRunSpeed = 8.0f;
     [SerializeField]
+    private float _playerRotateSpeed = 10.0f;
+    [SerializeField]
     private float _jumpHeight = 1.0f;
     [SerializeField]
     private float _gravity = -9.81f;
-    [SerializeField]
-    private float _rotationSpeed = 1f;
     [SerializeField]
     private float _animationSmoothTime = 0.1f;
     [SerializeField]
@@ -83,37 +113,55 @@ public class PlayerController : NetworkBehaviour
     private Transform _bulletParent;
     [SerializeField]
     private Transform _aimTarget;
-    [SerializeField]
-    private WeaponController _weapon;
-    public WeaponController Weapon => _weapon;
+    [field: SerializeField]
+    public WeaponController Weapon { get; private set; }
     [SerializeField]
     private int _defaultHp = 10;
+    public int maxHP => _defaultHp;
+    public int HP
+    {
+        get => (int)_networkVariableHP.value;
+        set
+        {
+            int newValue = Mathf.Clamp(value, 0, maxHP);
+            if (HP != newValue)
+            {
+                _networkVariableHP.value = newValue;
+            }
+        }
+    }
 
-    public NetworkVariable<PlayerData> playerData { get; private set; }
+    private PhotonNetworkVariable _networkVariableHP;
+
+    public Action statUpdateAction;
+
+    public bool enableInput
+    {
+        set { if (value) _playerInput.ActivateInput(); else _playerInput.DeactivateInput(); }
+    }
 
     public PlayerUIController PlayerUIController { get; private set; }
+    public int playerId => _photonView.ControllerActorNr;
+    public string playerName => _photonView.Controller.NickName;
+    public bool isMine => _photonView.IsMine;
+    
     private CharacterController _characterController;
     private PlayerInput _playerInput;
+    private PhotonView _photonView;
     private int _animatorParameterIdMoveX;
     private int _animatorParameterIdMoveZ;
     private int _animatorParameterIdRun;
-    private int _animatorParameterIdJump;
 
     private InputAction _actionMove;
-    private InputAction _actionAim;
     private InputAction _actionTarget;
     private InputAction _actionShoot;
-    private InputAction _actionRun;
-    private float _velocityY;
-    private Transform _cameraMainTransform;
 
     private Vector2 _currentAnimationBlendVector = Vector2.zero;
     private Vector2 _currentAnimationVelocity;
-    private float _currentAnimationRunValue = 0f;
-    private float _currentAnimationRunVelocity = 0f;
 
     private Vector3 _currentDirectionForward;
     private Vector3 _currentDirectionRight;
+    private float _currentDirectionAngleNonPlayer;
 
     private PlayerController _enemyTarget;
     private PlayerController EnemyTarget
@@ -126,23 +174,16 @@ public class PlayerController : NetworkBehaviour
                 _enemyTarget.PlayerUIController.IsTarget = false;
             }
             _enemyTarget = value;
-            if (_enemyTarget != null)
+            if (_enemyTarget != null && !_enemyTarget.isMine)
             {
                 _enemyTarget.PlayerUIController.IsTarget = true;
             }
         }
     }
 
-    public PlayerController() : base()
-    {
-        playerData = new NetworkVariable<PlayerData>(
-            default,
-            NetworkVariableReadPermission.Everyone,
-            NetworkVariableWritePermission.Owner);
-    }
-
     private void Awake()
     {
+        _photonView = GetComponent<PhotonView>();
         PlayerUIController = GetComponent<PlayerUIController>();
         _characterController = GetComponent<CharacterController>();
         _playerInput = GetComponent<PlayerInput>();
@@ -150,24 +191,35 @@ public class PlayerController : NetworkBehaviour
         _animatorParameterIdMoveX = Animator.StringToHash("MoveX");
         _animatorParameterIdMoveZ = Animator.StringToHash("MoveZ");
         _animatorParameterIdRun = Animator.StringToHash("Running");
-        _animatorParameterIdJump = Animator.StringToHash("Jump");
 
         _actionMove = _playerInput.actions["Move"];
-        _actionAim = _playerInput.actions["Aim"];
         _actionTarget = _playerInput.actions["Target"];
         _actionTarget.performed += onTargetAction;
 
         _actionShoot = _playerInput.actions["Shoot"];
-        _actionRun = _playerInput.actions["Run"];
-
-        _cameraMainTransform = Camera.main.transform;
     }
 
+    public override void OnEnable()
+    {
+        base.OnEnable();
+        Weapon.Initialize();
+        GameController.Instance.RegisterPlayer(this);
+        _networkVariableHP = new PhotonNetworkVariable("HP", maxHP, onStatUpdate, this);
+        PlayerUIController.enabled = true;
+    }
+
+    public override void OnDisable()
+    {
+        GameController.Instance.UnregisterPlayer(this);
+        base.OnDisable();
+    }
+
+    /*
     public override void OnNetworkSpawn()
     {
         base.OnNetworkSpawn();
         _weapon.Initialize();
-        GameController.Instance.RegisterPlayer(OwnerClientId, this);
+        GameController.Instance.RegisterPlayer(this);
         if (IsOwner)
         {
             playerData.Value = new PlayerData(_defaultHp);
@@ -186,164 +238,120 @@ public class PlayerController : NetworkBehaviour
         GameController.Instance.UnregisterPlayer(OwnerClientId);
         base.OnNetworkDespawn();
     }
+    */
 
     // Start is called before the first frame update
     void Start()
     {
-        _velocityY = 0;
-        _currentDirectionForward = Vector3.forward;
-        _currentDirectionRight = Vector3.right;
+        if (isMine)
+        {
+            Vector3 target = new Vector3(0, transform.position.y, 0);
+            rotationTransform.LookAt(target);
+            updateDirection();
+        }
     }
 
+    private void updateDirection()
+    {
+        _currentDirectionForward = rotationTransform.forward;
+        _currentDirectionRight = rotationTransform.right;
+    }
 
     // Update is called once per frame
     private void Update()
     {
-        if (!IsOwner)
+        if (isMine)
         {
-            return;
-        }
-
-        Vector2 inputMove = _actionMove.ReadValue<Vector2>();
-        float inputMagnitude = inputMove.magnitude;
-
-        if (EnemyTarget != null)
-        {
-            Vector3 enemyPosition = new Vector3(
-                EnemyTarget.transform.position.x,
-                transform.position.y,
-                EnemyTarget.transform.position.z);
-            _rotationTransform.LookAt(enemyPosition);
-            _currentDirectionForward = _rotationTransform.forward;
-            _currentDirectionRight = _rotationTransform.right;
-
-            if (inputMagnitude > 0.01)
+            if (HP == 0)
             {
-                Vector2 forward = new Vector2(_currentDirectionForward.x, _currentDirectionForward.z);
-                float angle = Vector2.SignedAngle(inputMove, forward) * Mathf.Deg2Rad;
-                inputMove.y = Mathf.Cos(angle) * inputMagnitude;
-                inputMove.x = Mathf.Sin(angle) * inputMagnitude;
+                PhotonNetwork.Destroy(_photonView);
+                UIManager.Instance.ShowMessageBox(
+                    "You Lose!", (_) => { PhotonNetworkManager.Instance.LeaveRoom(); }, true);
+                return;
+            }
+            Vector2 inputMove = _actionMove.ReadValue<Vector2>();
+            float right = Pointer.current.delta.right.ReadValue() - Pointer.current.delta.left.ReadValue();
+ 
+            if (EnemyTarget != null)
+            {
+                Vector3 enemyPosition = new Vector3(
+                    EnemyTarget.transform.position.x,
+                    transform.position.y,
+                    EnemyTarget.transform.position.z);
+                rotationTransform.LookAt(enemyPosition);
+                updateDirection();
+                /*
+                if (inputMagnitude > 0.01)
+                {
+                    Vector2 forward = new Vector2(_currentDirectionForward.x, _currentDirectionForward.z);
+                    float angle = Vector2.SignedAngle(inputMove, forward) * Mathf.Deg2Rad;
+                    inputMove.y = Mathf.Cos(angle) * inputMagnitude;
+                    inputMove.x = Mathf.Sin(angle) * inputMagnitude;
+                }*/
+            }
+            else if (right != 0)
+            {
+                rotationTransform.Rotate(Vector3.up, right * Time.deltaTime * _playerRotateSpeed);
+                updateDirection();
+            }
+
+/*            if (inputMove.magnitude > 0.01)
+            {
+                float angleForward = Mathf.Rad2Deg * Mathf.Atan2(inputMove.y, inputMove.x) - 90;
+                Quaternion rotation = getRotation(angleForward);
+                if (rotationTransform.rotation != rotation)
+                {
+                    rotationTransform.rotation = rotation;
+                    _photonView.RPC("SetDirection", RpcTarget.OthersBuffered, angleForward);
+                }
+                _currentDirectionForward = rotationTransform.forward;
+                _currentDirectionRight = rotationTransform.right;
+                inputMove.x = 0;
+                inputMove.y = inputMagnitude;
+            }
+*/
+
+            _currentAnimationBlendVector = Vector2.SmoothDamp(
+                _currentAnimationBlendVector,
+                inputMove,
+                ref _currentAnimationVelocity,
+                _animationSmoothTime);
+
+            Vector3 move =
+                _currentAnimationBlendVector.x * _currentDirectionRight +
+                _currentAnimationBlendVector.y * _currentDirectionForward;
+            move.y = 0f;
+            if (move.magnitude > 0.001f)
+            {
+                move = move * Time.deltaTime * _playerRunSpeed;
+                _characterController.Move(move);
+            }
+
+            _animator.SetFloat(_animatorParameterIdMoveX, _currentAnimationBlendVector.x);
+            _animator.SetFloat(_animatorParameterIdMoveZ, _currentAnimationBlendVector.y);
+            _animator.SetFloat(_animatorParameterIdRun, 1.0f);
+
+            if (_actionShoot.ReadValue<float>() > 0.5f)
+            {
+                Weapon.FireBullet(_bulletParent, _currentDirectionForward, this);
             }
         }
-        else if (inputMove.magnitude > 0.01)
+        else
         {
-            float angleForward = Mathf.Rad2Deg * Mathf.Atan2(inputMove.y, inputMove.x) - 90;
-            _rotationTransform.rotation = Quaternion.Euler(0, -1 * angleForward, 0);
-            //            _currentDirectionForward = _rotationTransform.rotation * Vector3.forward;
-            //            _currentDirectionRight = _rotationTransform.rotation * Vector3.right;
-            _currentDirectionForward = _rotationTransform.forward;
-            _currentDirectionRight = _rotationTransform.right;
-            inputMove.x = 0;
-            inputMove.y = inputMagnitude;
-        }
-
-        _currentAnimationBlendVector = Vector2.SmoothDamp(
-            _currentAnimationBlendVector,
-            inputMove,
-            ref _currentAnimationVelocity,
-            _animationSmoothTime);
-
-        Vector3 move =
-            _currentAnimationBlendVector.x * _currentDirectionRight +
-            _currentAnimationBlendVector.y * _currentDirectionForward;
-        move.y = 0f;
-        if (move.magnitude > 0.001f)
-        {
-            move = move * Time.deltaTime * _playerRunSpeed;
-            _characterController.Move(move);
-        }
-
-        _animator.SetFloat(_animatorParameterIdMoveX, _currentAnimationBlendVector.x);
-        _animator.SetFloat(_animatorParameterIdMoveZ, _currentAnimationBlendVector.y);
-        _animator.SetFloat(_animatorParameterIdRun, 1.0f);
-
-        if (_actionShoot.ReadValue<float>() > 0.5f)
-        {
-            _weapon.FireBullet(_bulletParent, _currentDirectionForward, this);
+            if (EnemyTarget != null)
+            {
+                Vector3 enemyPosition = new Vector3(
+                    EnemyTarget.transform.position.x,
+                    transform.position.y,
+                    EnemyTarget.transform.position.z);
+                rotationTransform.LookAt(enemyPosition);
+            }
         }
     }
 
-    /*
-    void UpdateOld()
-    {
-        bool isGrounded = _characterController.isGrounded;
-        if (isGrounded && _velocityY < 0)
-        {
-            _velocityY = 0f;
-        }
-
-        Vector2 inputMove = _actionMove.ReadValue<Vector2>();
-
-        _currentAnimationBlendVector = Vector2.SmoothDamp(
-            _currentAnimationBlendVector,
-            inputMove,
-            ref _currentAnimationVelocity,
-            _animationSmoothTime);
-
-        _currentAnimationRunValue = Mathf.SmoothDamp(
-            _currentAnimationRunValue,
-            _actionRun.ReadValue<float>(),
-            ref _currentAnimationRunVelocity,
-            _animationSmoothTime);
-
-        Vector3 move =
-            _currentAnimationBlendVector.x * _cameraMainTransform.right.normalized +
-            _currentAnimationBlendVector.y * _cameraMainTransform.forward.normalized;
-        move.y = 0f;
-        if (move.magnitude > 0.001f)
-        {
-            float speed = Mathf.Lerp(_playerWalkSpeed, _playerRunSpeed, _currentAnimationRunValue);
-            move = move * Time.deltaTime * speed;
-            Debug.Log("move: " + move);
-            CollisionFlags collision = _characterController.Move(move);
-            if ((collision & CollisionFlags.Sides) != 0)
-            {
-                Debug.Log("Collision Sides");
-            }
-            if ((collision & CollisionFlags.Above) != 0)
-            {
-                Debug.Log("Collision Above");
-            }
-            if ((collision & CollisionFlags.Below) != 0)
-            {
-//                Debug.Log("Collision Below");
-            }
-
-
-        }
-        _animator.SetFloat(_animatorParameterIdMoveX, _currentAnimationBlendVector.x);
-        _animator.SetFloat(_animatorParameterIdMoveZ, _currentAnimationBlendVector.y);
-        _animator.SetFloat(_animatorParameterIdRun, _currentAnimationRunValue);
-
-        if (_actionJump.triggered && isGrounded)
-        {
-            _velocityY += Mathf.Sqrt(_jumpHeight * -3.0f * _gravity);
-            _animator.SetTrigger(_animatorParameterIdJump);
-        }
-        _velocityY += _gravity * Time.deltaTime;
-        _characterController.Move(
-            new Vector3(0, _velocityY, 0) * Time.deltaTime);
-
-        Debug.Log("Rotation: " + _rotationTransform.rotation);
-
-        Quaternion targetRotation = Quaternion.Euler(0, _cameraMainTransform.eulerAngles.y, 0);
-        _rotationTransform.rotation = Quaternion.Lerp(
-            _rotationTransform.rotation,
-            targetRotation,
-            _rotationSpeed * Time.deltaTime);
-
-        if (_actionAim.triggered)
-        {
-            bool isAiming = _cameraAim.Priority > _cameraThirdPerson.Priority;
-            _cameraAim.Priority = _cameraThirdPerson.Priority + (isAiming ? -1 : 1);
-        }
-
-        _aimTarget.transform.position = _cameraMainTransform.position + _cameraMainTransform.forward * 20;
-    }
-    */
     public void onShootAction(InputAction.CallbackContext context)
     {
-//        _weapon.FireBullet(_bulletParent);
+//        _weapon.FireBullet(_bulletParent, forward, this);
     }
     /*
     private void onEnemyStateChange()
@@ -356,13 +364,21 @@ public class PlayerController : NetworkBehaviour
 
     public void onTargetAction(InputAction.CallbackContext context)
     {
-        if (EnemyTarget == null)
+        if (isMine)
         {
-            EnemyTarget = GameController.Instance.GetClosestTarget();
-        }
-        else
-        {
-            EnemyTarget = null;
+            if (EnemyTarget == null)
+            {
+                EnemyTarget = GameController.Instance.GetClosestTarget();
+            }
+            else
+            {
+                EnemyTarget = null;
+            }
+
+            _photonView.RPC(
+                "SetTarget",
+                RpcTarget.OthersBuffered,
+                EnemyTarget == null ? -1 : EnemyTarget.playerId);
         }
     }
 
@@ -370,16 +386,79 @@ public class PlayerController : NetworkBehaviour
     {
         Vector3 positionDelta = position - transform.position;
         positionDelta.y = 0;
-        Vector3 playerForward = _rotationTransform.forward;
+        Vector3 playerForward = rotationTransform.forward;
         playerForward.y = 0;
         return Vector3.Angle(playerForward, positionDelta) <= _viewAngle;
     }
 
-    [Rpc(SendTo.Owner)]
-    public void OnBulletHitRpc(int damage)
+    public void OnBulletHit(int damage)
     {
-        playerData.Value.currentHP -= damage;
-        playerData.SetDirty(true);
-        playerData.OnValueChanged?.Invoke(null, playerData.Value);
+        int newHP = Mathf.Clamp(HP - damage, 0, maxHP);
+        if (HP != newHP)
+        {
+            Hashtable table = new();
+            table.Add(_networkVariableHP.key, newHP);
+            PhotonNetwork.LocalPlayer.SetCustomProperties(table);
+        }
+    }
+
+    public override void OnPlayerPropertiesUpdate(Player targetPlayer,Hashtable properties)
+    {
+        base.OnPlayerPropertiesUpdate(targetPlayer, properties);
+
+        object value;
+        if (targetPlayer == _photonView.Owner &&
+            properties.TryGetValue(_networkVariableHP.key, out value))
+        {
+            _networkVariableHP.value = value;
+        }
+    }
+
+    private void onStatUpdate()
+    {
+        statUpdateAction?.Invoke();
+    }
+
+    [PunRPC]
+    public void SetTarget(int playerId)
+    {
+        if (!_photonView.IsMine)
+        {
+            EnemyTarget = GameController.Instance.GetPlayer(playerId);
+            if (EnemyTarget == null)
+            {
+                rotationTransform.rotation = getRotation(_currentDirectionAngleNonPlayer);
+            }
+        }
+    }
+
+    [PunRPC]
+    public void SetDirection(float angle)
+    {
+        if (!_photonView.IsMine)
+        {
+            _currentDirectionAngleNonPlayer = angle;
+            if (EnemyTarget == null)
+            {
+                rotationTransform.rotation = getRotation(angle);
+            }
+        }
+    }
+
+    private Quaternion getRotation(float angle)
+    {
+        return Quaternion.Euler(0, -1 * angle, 0);
+    }
+
+    public void OnPhotonSerializeView(PhotonStream stream, PhotonMessageInfo info)
+    {
+        if (stream.IsWriting)
+        {
+            stream.SendNext(rotationTransform.rotation);
+        }
+        else if (stream.IsReading)
+        {
+            rotationTransform.rotation = (Quaternion)stream.ReceiveNext();
+        }
     }
 }

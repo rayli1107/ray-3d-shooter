@@ -1,14 +1,22 @@
 using Cinemachine;
+using Photon.Pun;
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
+public enum GameState
+{
+    GAME_INIT,
+    GAME_STARTED,
+    GAME_FINISHED
+}
+
 public class GameController : MonoBehaviour
 {
-    [SerializeField]
-    private CinemachineVirtualCamera _cameraThirdPerson;
+    [field: SerializeField]
+    public CinemachineVirtualCamera cameraThirdPerson { get; private set; }
 
     [SerializeField]
     private CinemachineVirtualCamera _cameraAim;
@@ -17,76 +25,97 @@ public class GameController : MonoBehaviour
     private float _targetDistance = 200f;
 
     [SerializeField]
-    private Transform _enemyParent;
+    private Vector2 _startingLocationMin = new Vector2(-40f, -40f);
+
+    [SerializeField]
+    private Vector2 _startingLocationMax = new Vector2(40f, 40f);
+
 
     public static GameController Instance;
     public System.Random Random { get; private set; }
 
-    private PlayerController _player;
-    private List<EnemyController> _enemiesInView;
-    private Dictionary<ulong, PlayerController> _players;
+    public PlayerController activePlayer { get; private set; }
+    private Dictionary<int, PlayerController> _players;
 
     private void Awake()
     {
         Instance = this;
         Random = new System.Random(Guid.NewGuid().GetHashCode());
-        _enemiesInView = new List<EnemyController>();
-        _players = new Dictionary<ulong, PlayerController>();
+        _players = new Dictionary<int, PlayerController>();
     }
 
-    // Start is called before the first frame update
-    void Start()
+    public void CreatePlayer()
     {
+        float rangeX = _startingLocationMax.x - _startingLocationMin.x;
+        float rangeY = _startingLocationMax.y - _startingLocationMin.y;
         
-    }
-
-    // Update is called once per frame
-    void Update()
-    {
-        
+        Vector3 location = new Vector3(
+            (float)Random.NextDouble() * rangeX + _startingLocationMin.x,
+            0, 
+            (float)Random.NextDouble() * rangeY + _startingLocationMin.y);
+        PhotonNetwork.Instantiate("Player", location, Quaternion.identity);
     }
 
     public void SetActivePlayer(PlayerController player)
     {
-        _player = player;
-        UIManager.Instance.WeaponUIController.weapon = player.Weapon;
-        if (_cameraThirdPerson != null)
+        activePlayer = player;
+        UIManager.Instance.WeaponUIController.weapon = player == null ? null : player.Weapon;
+        if (cameraThirdPerson != null)
         {
-            _cameraThirdPerson.Follow = player != null ? player.transform : null;
-            _cameraThirdPerson.LookAt = player != null ? player.transform : null;
+            if (player != null)
+            {
+                cameraThirdPerson.Follow = player.rotationTransform.transform;
+                cameraThirdPerson.LookAt = player.rotationTransform.transform;
+//                cameraThirdPerson.Follow = player.Weapon.transform;
+//                cameraThirdPerson.LookAt = player.Weapon.transform;
+            }
+            else
+            {
+                cameraThirdPerson.Follow = null;
+                cameraThirdPerson.LookAt = null;
+            }
         }
         if (_cameraAim != null)
         {
-            _cameraAim.Follow = player != null ? player.transform : null;
-            _cameraAim.LookAt = player != null ? player.transform : null;
+            _cameraAim.Follow = player != null ? player.rotationTransform.transform : null;
+            _cameraAim.LookAt = player != null ? player.rotationTransform.transform : null;
         }
     }
 
-    public void RegisterPlayer(ulong clientId, PlayerController player)
+    public void RegisterPlayer(PlayerController player)
     {
-        _players[clientId] = player;
+        _players[player.playerId] = player;
+        if (player.isMine)
+        {
+            SetActivePlayer(player);
+        }
     }
 
-    public void UnregisterPlayer(ulong clientId)
+    public void UnregisterPlayer(PlayerController player)
     {
-        _players.Remove(clientId);
+        Debug.LogFormat("UnregisterPlayer {0} {1}", player.playerId, _players.Count);
+        _players.Remove(player.playerId);
+        if (player.isMine)
+        {
+            SetActivePlayer(null);
+        }
     }
 
     public PlayerController GetClosestTarget()
     {
-        ulong playerId = NetworkManager.Singleton.LocalClientId;
+        int playerId = activePlayer.playerId;
 
         PlayerController currentTarget = null;
         float currentDistance = Mathf.Infinity;
-        foreach (KeyValuePair<ulong, PlayerController> entry in _players)
+        foreach (KeyValuePair<int, PlayerController> entry in _players)
         {
             if (entry.Key != playerId)
             {
-                Vector3 positionDelta = entry.Value.transform.position - _player.transform.position;
+                Vector3 positionDelta = entry.Value.transform.position - activePlayer.transform.position;
                 positionDelta.y = 0;
                 float distance = positionDelta.magnitude;
                 if (distance <= Mathf.Min(_targetDistance, currentDistance) &&
-                    _player.IsFacing(entry.Value.transform.position))
+                    activePlayer.IsFacing(entry.Value.transform.position))
                 {
                     currentDistance = distance;
                     currentTarget = entry.Value;
@@ -96,32 +125,8 @@ public class GameController : MonoBehaviour
         return currentTarget;
     }
 
-    /*
-    public EnemyController GetClosestEnemy()
+    public PlayerController GetPlayer(int id)
     {
-        _enemiesInView.Clear();
-        EnemyController[] enemies = _enemyParent.GetComponentsInChildren<EnemyController>();
-
-        EnemyController currentEnemy = null;
-        float currentDistance = Mathf.Infinity;
-
-        foreach (EnemyController enemy in enemies)
-        {
-            enemy.IsTarget = false;
-
-            Vector3 positionDelta = enemy.transform.position - _player.transform.position;
-            positionDelta.y = 0;
-            Vector3 playerForward = _player.transform.forward;
-            playerForward.y = 0;
-            float distance = positionDelta.magnitude;
-            if (distance <= Mathf.Min(_targetDistance, currentDistance) &&
-                Vector3.Angle(playerForward, positionDelta) <= _targetAngle)
-            {
-                distance = currentDistance;
-                currentEnemy = enemy;
-            }
-        }
-        return currentEnemy;
+        return _players.GetValueOrDefault(id, null);
     }
-    */
 }

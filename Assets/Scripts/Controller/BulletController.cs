@@ -1,25 +1,31 @@
+using Photon.Pun;
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using RpcTarget = Photon.Pun.RpcTarget;
 
-public class BulletController : NetworkBehaviour
+public class BulletController : MonoBehaviour
 {
     [HideInInspector]
     public Vector3 direction;
 
     [HideInInspector]
-    public ulong sourcePlayerClientId;
+    public int sourcePlayerClientId;
 
     [HideInInspector]
     public int damage;
 
+    private MeshRenderer _meshRenderer;
+    private PhotonView _photonView;
     private float _speed = 50f;
     private float _duration = 3;
     private float _timeStart;
 
-    private void OnEnable()
+    private void Awake()
     {
+        _photonView = GetComponent<PhotonView>();
+        _meshRenderer = GetComponent<MeshRenderer>();
     }
 
     // Start is called before the first frame update
@@ -31,14 +37,14 @@ public class BulletController : NetworkBehaviour
     // Update is called once per frame
     void Update()
     {
-        if (!IsOwner)
+        if (!_photonView.IsMine)
         {
             return;
         }
 
         if (Time.time - _timeStart >= _duration)
         {
-            GetComponent<NetworkObject>().Despawn(true);
+            PhotonNetwork.Destroy(gameObject);
         }
         else
         {
@@ -48,30 +54,25 @@ public class BulletController : NetworkBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
-        if (!IsOwner)
-        {
-            return;
-        }
-
         PlayerController target = other.GetComponent<PlayerController>();
-        if (target != null)
+        if (target != null && _photonView.ControllerActorNr != target.playerId)
         {
-            NetworkObject targetNetworkObject = target.GetComponent<NetworkObject>();
-            if (sourcePlayerClientId != targetNetworkObject.OwnerClientId)
+            _meshRenderer.enabled = false;
+
+            if (target.isMine)
             {
-                target.OnBulletHitRpc(damage);
+                target.OnBulletHit(1);
+                _photonView.RPC("BulletDestroyRPC", RpcTarget.OthersBuffered);
             }
         }
-        /*
-                if (sourcePlayer)
-                {
-                    EnemyController controller = other.GetComponent<EnemyController>();
-                    if (controller != null)
-                    {
-                        controller.OnBulletHit(damage);
-                    }
-                }
-        */
-        GetComponent<NetworkObject>().Despawn(true);
+    }
+
+    [PunRPC]
+    public void BulletDestroyRPC()
+    {
+        if (_photonView.IsMine)
+        {
+            PhotonNetwork.Destroy(gameObject);
+        }
     }
 }

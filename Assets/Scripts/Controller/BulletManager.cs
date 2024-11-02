@@ -27,11 +27,12 @@ public class BulletManager : NetworkBehaviour
         Vector3 direction,
         int damage)
     {
+        /*
         BulletController bullet = Instantiate(_bulletPrefab, transform);
         bullet.transform.position = position;
         bullet.direction = direction;
         bullet.sourcePlayerClientId = clientId;
         bullet.damage = damage;
-        bullet.GetComponent<NetworkObject>().Spawn(true);
+        */
     }
 }

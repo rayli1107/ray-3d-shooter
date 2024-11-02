@@ -59,4 +59,16 @@ public class BaseMessageBox : ModalObject
         gameObject.SetActive(false);
         callbackHandler?.Invoke(ok);
     }
+
+    public override void OnCancel()
+    {
+        if (buttonCancelEnabled)
+        {
+            OnButton(false);
+        }
+        else if (buttonOKEnabled)
+        {
+            OnButton(true);
+        }
+    }
 }
