@@ -10,11 +10,28 @@ using UnityEngine.UI;
 public class LoginPanel : MonoBehaviour
 {
     [SerializeField]
-    private Button _buttonLoginFB;
+    private TMP_InputField _inputSignupEmail;
 
-    public bool enableFacebookLogin
+    [SerializeField]
+    private TMP_InputField _inputSignupPassword;
+
+    [SerializeField]
+    private TMP_InputField _inputSignupNickname;
+
+    [SerializeField]
+    private TMP_InputField _inputLoginEmail;
+
+    [SerializeField]
+    private TMP_InputField _inputLoginPassword;
+
+    public void Signup()
     {
-        get => _buttonLoginFB.gameObject.activeInHierarchy;
-        set { _buttonLoginFB.gameObject.SetActive(value); }
+        LoginController.Instance.Signup(
+            _inputSignupEmail.text, _inputSignupPassword.text, _inputSignupNickname.text);
+    }
+
+    public void SignIn()
+    {
+        LoginController.Instance.SignIn(_inputLoginEmail.text, _inputLoginPassword.text);
     }
 }

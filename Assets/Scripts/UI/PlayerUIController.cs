@@ -5,9 +5,6 @@ using UnityEngine.UI;
 public class PlayerUIController : MonoBehaviour
 {
     [SerializeField]
-    private Canvas _canvas;
-
-    [SerializeField]
     private Slider _sliderHP;
 
     [SerializeField]
@@ -16,22 +13,36 @@ public class PlayerUIController : MonoBehaviour
     [SerializeField]
     private TextMeshProUGUI _labelCoordinates;
 
+    [SerializeField]
+    private TextMeshProUGUI _labelHP;
+
+    [SerializeField]
+    private TextMeshProUGUI _labelCoins;
+
+
+    private Canvas _canvas;
+
     public bool IsTarget
     {
         get => _imageTarget.enabled;
         set { _imageTarget.enabled = value; }
     }
 
-    private PlayerController _player;
+    [HideInInspector]
+    public PlayerController player;
 
     private void Awake()
     {
-        _player = GetComponent<PlayerController>();
+        _canvas = GetComponent<Canvas>();
     }
 
     private void OnEnable()
     {
-        _player.statUpdateAction += onPlayerDataValueChange;
+        if (player == null)
+        {
+            player = GetComponent<PlayerController>();
+        }
+        player.statUpdateAction += onPlayerDataValueChange;
         onPlayerDataValueChange();
         InvokeRepeating(nameof(updateLocation), 0, 0.1f);
     }
@@ -39,26 +50,39 @@ public class PlayerUIController : MonoBehaviour
     private void OnDisable()
     {
         CancelInvoke(nameof(updateLocation));
-        _player.statUpdateAction -= onPlayerDataValueChange;
+        player.statUpdateAction -= onPlayerDataValueChange;
+        player = null;
     }
 
     private void onPlayerDataValueChange()
     {
-        _sliderHP.maxValue = _player.maxHP;
-        _sliderHP.value = _player.HP;
+        _sliderHP.maxValue = player.maxHP;
+        _sliderHP.value = player.HP;
+        if (_labelHP != null)
+        {
+            _labelHP.text = string.Format("{0} / {1}", player.HP, player.maxHP);
+        }
     }
 
     private void updateLocation()
     {
         _labelCoordinates.text = string.Format(
             "{0}: {1:0.00}, {2:0.00}",
-            _player.playerName,
-            transform.position.x,
-            transform.position.z);
+            player.playerName,
+            player.transform.position.x,
+            player.transform.position.z);
+
+        if (_labelCoins != null)
+        {
+            _labelCoins.text = player.Coins.ToString();
+        }
     }
 
     private void Update()
     {
-        _canvas.transform.LookAt(GameController.Instance.cameraThirdPerson.transform);
+        if (_canvas != null)
+        {
+            _canvas.transform.LookAt(GameController.Instance.cameraThirdPerson.transform);
+        }
     }
 }

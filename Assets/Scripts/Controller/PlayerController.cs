@@ -1,97 +1,26 @@
-using Cinemachine;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using Photon.Pun;
 using System;
-using ExitGames.Client.Photon;
-using Photon.Realtime;
 
-/*public class PlayerData : INetworkSerializable
-{
-    private int _maxHP;
-    public int maxHP
-    {
-        get => _maxHP;
-        set
-        {
-            _maxHP = value;
-            currentHP = currentHP;
-        }
-    }
-
-    private int _currentHP;
-    public int currentHP
-    {
-        get => _currentHP;
-        set { _currentHP = Mathf.Clamp(value, 0, maxHP); }
-    }
-
-    public PlayerData()
-    {
-    }
-
-    public PlayerData(int hp)
-    {
-        maxHP = hp;
-        currentHP = hp;
-    }
-
-    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
-    {
-        if (serializer.IsReader)
-        {
-            FastBufferReader reader = serializer.GetFastBufferReader();
-            reader.ReadValueSafe(out int value);
-            maxHP = value;
-
-            reader.ReadValueSafe(out value);
-            currentHP = value;
-        }
-        else
-        {
-            FastBufferWriter writer = serializer.GetFastBufferWriter();
-            writer.WriteValueSafe(maxHP);
-            writer.WriteValueSafe(currentHP);
-        }
-    }
-}
-*/
-
-public class PhotonNetworkVariable
-{
-    public Action updateAction;
-    private PlayerController _playerController;
-    public bool isMine => _playerController.isMine;
-    public static string actorId = "ActorId";
-    public string key { get; private set; }
-    private object _value;
-    public object value
-    {
-        get => _value;
-        set
-        {
-            if (_value != value)
-            {
-                _value = value;
-                updateAction?.Invoke();
-            }
-        }
-    }
-
-    public PhotonNetworkVariable(string key, object value, Action updateAction, PlayerController playerController)
-    {
-        this.updateAction = updateAction;
-        this.key = key;
-        _playerController = playerController;
-        _value = value;
-    }
+public enum PlayerState {
+    START,
+    HP_INITIALIZED,
+    REGISTERED
 }
 
 [RequireComponent(typeof(CharacterController), typeof(PlayerInput))]
 public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
 {
+    [field: SerializeField]
+    public PlayerUIController playerUIController { get; private set; }
+
     [SerializeField]
     private Animator _animator;
+
+    [SerializeField]
+    private int _defaultCoins = 20;
+
     [field: SerializeField]
     public Transform rotationTransform { get; private set; }
     [SerializeField]
@@ -110,51 +39,41 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
     private float _viewAngle = 45f;
 
     [SerializeField]
-    private Transform _bulletParent;
-    [SerializeField]
     private Transform _aimTarget;
-    [field: SerializeField]
-    public WeaponController Weapon { get; private set; }
+
     [SerializeField]
     private int _defaultHp = 10;
+
     public int maxHP => _defaultHp;
-    public int HP
-    {
-        get => (int)_networkVariableHP.value;
-        set
-        {
-            int newValue = Mathf.Clamp(value, 0, maxHP);
-            if (HP != newValue)
-            {
-                _networkVariableHP.value = newValue;
-            }
-        }
-    }
 
     private PhotonNetworkVariable _networkVariableHP;
-
+    private PhotonNetworkVariable _networkVariableCoin;
+    private PhotonNetworkVariable _networkVariablePlayerPosition;
+    public int HP => (int)_networkVariableHP.value;
+    public int Coins => _networkVariableCoin == null ? 0 : (int)_networkVariableCoin.value;
     public Action statUpdateAction;
+
+    private PlayerState _playerState;
 
     public bool enableInput
     {
         set { if (value) _playerInput.ActivateInput(); else _playerInput.DeactivateInput(); }
     }
 
-    public PlayerUIController PlayerUIController { get; private set; }
-    public int playerId => _photonView.ControllerActorNr;
-    public string playerName => _photonView.Controller.NickName;
-    public bool isMine => _photonView.IsMine;
+    public int playerId => photonView.ControllerActorNr;
+    public string playerName => photonView.Controller.NickName;
+    public string playerUserId => photonView.Controller.UserId;
+
+    public bool isMine => photonView.IsMine;
     
     private CharacterController _characterController;
     private PlayerInput _playerInput;
-    private PhotonView _photonView;
     private int _animatorParameterIdMoveX;
     private int _animatorParameterIdMoveZ;
     private int _animatorParameterIdRun;
 
     private InputAction _actionMove;
     private InputAction _actionTarget;
-    private InputAction _actionShoot;
 
     private Vector2 _currentAnimationBlendVector = Vector2.zero;
     private Vector2 _currentAnimationVelocity;
@@ -171,20 +90,18 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
         {
             if (_enemyTarget != null)
             {
-                _enemyTarget.PlayerUIController.IsTarget = false;
+                _enemyTarget.playerUIController.IsTarget = false;
             }
             _enemyTarget = value;
             if (_enemyTarget != null && !_enemyTarget.isMine)
             {
-                _enemyTarget.PlayerUIController.IsTarget = true;
+                _enemyTarget.playerUIController.IsTarget = true;
             }
         }
     }
 
     private void Awake()
     {
-        _photonView = GetComponent<PhotonView>();
-        PlayerUIController = GetComponent<PlayerUIController>();
         _characterController = GetComponent<CharacterController>();
         _playerInput = GetComponent<PlayerInput>();
 
@@ -195,50 +112,77 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
         _actionMove = _playerInput.actions["Move"];
         _actionTarget = _playerInput.actions["Target"];
         _actionTarget.performed += onTargetAction;
+    }
 
-        _actionShoot = _playerInput.actions["Shoot"];
+    private void loadPlayerTransform()
+    {
+        if (_networkVariablePlayerPosition.value != null)
+        {
+            try
+            {
+                PlayerTransform playerTransform = JsonUtility.FromJson<PlayerTransform>(
+                    (string)_networkVariablePlayerPosition.value);
+                transform.position = new Vector3(
+                    playerTransform.x, transform.position.y, playerTransform.z);
+                rotationTransform.rotation = Quaternion.Euler(
+                    playerTransform.rotation_x,
+                    playerTransform.rotation_y,
+                    playerTransform.rotation_z);
+            }
+            catch (ArgumentException)
+            {
+            }
+        }
     }
 
     public override void OnEnable()
     {
         base.OnEnable();
-        Weapon.Initialize();
-        GameController.Instance.RegisterPlayer(this);
-        _networkVariableHP = new PhotonNetworkVariable("HP", maxHP, onStatUpdate, this);
-        PlayerUIController.enabled = true;
+        Debug.Log("PlayerWeaponManager.OnEnable");
+
+        _networkVariableHP = PhotonNetworkManager.Instance.RegisterNetworkVariable(
+            photonView, "HP", maxHP, onStatUpdate);
+        if (photonView.IsMine && HP == 0)
+        {
+            _playerState = PlayerState.START;
+            _networkVariableHP.LocalSetValue(maxHP);
+        }
+        else
+        {
+            _playerState = PlayerState.HP_INITIALIZED;
+        }
+
+        playerUIController.player = this;
+        playerUIController.gameObject.SetActive(!photonView.IsMine);
+
+        if (isMine)
+        {
+            _networkVariableCoin = PhotonNetworkManager.Instance.RegisterNetworkVariable(
+                photonView, "Coin", _defaultCoins, onStatUpdate);
+
+            _networkVariablePlayerPosition = PhotonNetworkManager.Instance.RegisterNetworkVariable(
+                photonView, "Position", null, null);
+            loadPlayerTransform();
+            InvokeRepeating(nameof(SavePlayerTransform), 0, 0.5f);
+        }
     }
 
     public override void OnDisable()
     {
         GameController.Instance.UnregisterPlayer(this);
+        playerUIController.gameObject.SetActive(false);
+        CancelInvoke(nameof(SavePlayerTransform));
+        PhotonNetworkManager.Instance.UnregisterNetworkVariable(_networkVariableHP);
+        if (_networkVariablePlayerPosition != null)
+        {
+            PhotonNetworkManager.Instance.UnregisterNetworkVariable(_networkVariablePlayerPosition);
+        }
+        if (_networkVariableCoin != null)
+        {
+            PhotonNetworkManager.Instance.UnregisterNetworkVariable(_networkVariableCoin);
+        }
         base.OnDisable();
     }
-
-    /*
-    public override void OnNetworkSpawn()
-    {
-        base.OnNetworkSpawn();
-        _weapon.Initialize();
-        GameController.Instance.RegisterPlayer(this);
-        if (IsOwner)
-        {
-            playerData.Value = new PlayerData(_defaultHp);
-            GameController.Instance.SetActivePlayer(this);
-        }
-        PlayerUIController.enabled = true;
-    }
-
-    public override void OnNetworkDespawn()
-    {
-        PlayerUIController.enabled = false;
-        if (IsOwner)
-        {
-            GameController.Instance.SetActivePlayer(null);
-        }
-        GameController.Instance.UnregisterPlayer(OwnerClientId);
-        base.OnNetworkDespawn();
-    }
-    */
 
     // Start is called before the first frame update
     void Start()
@@ -260,13 +204,22 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
     // Update is called once per frame
     private void Update()
     {
-        if (isMine)
+        if (!isMine)
+        {
+            return;
+        }
+
+        if (_playerState == PlayerState.HP_INITIALIZED && GetComponent<PlayerWeaponManager>().enabled)
+        {
+            _playerState = PlayerState.REGISTERED;
+            GameController.Instance.RegisterPlayer(this);
+        }
+        else if (_playerState == PlayerState.REGISTERED)
         {
             if (HP == 0)
             {
-                PhotonNetwork.Destroy(_photonView);
-                UIManager.Instance.ShowMessageBox(
-                    "You Lose!", (_) => { PhotonNetworkManager.Instance.LeaveRoom(); }, true);
+                _networkVariablePlayerPosition.LocalSetValue(null);
+                GameController.Instance.OnActivePlayerDeath();
                 return;
             }
             Vector2 inputMove = _actionMove.ReadValue<Vector2>();
@@ -280,36 +233,12 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
                     EnemyTarget.transform.position.z);
                 rotationTransform.LookAt(enemyPosition);
                 updateDirection();
-                /*
-                if (inputMagnitude > 0.01)
-                {
-                    Vector2 forward = new Vector2(_currentDirectionForward.x, _currentDirectionForward.z);
-                    float angle = Vector2.SignedAngle(inputMove, forward) * Mathf.Deg2Rad;
-                    inputMove.y = Mathf.Cos(angle) * inputMagnitude;
-                    inputMove.x = Mathf.Sin(angle) * inputMagnitude;
-                }*/
             }
             else if (right != 0)
             {
                 rotationTransform.Rotate(Vector3.up, right * Time.deltaTime * _playerRotateSpeed);
                 updateDirection();
             }
-
-/*            if (inputMove.magnitude > 0.01)
-            {
-                float angleForward = Mathf.Rad2Deg * Mathf.Atan2(inputMove.y, inputMove.x) - 90;
-                Quaternion rotation = getRotation(angleForward);
-                if (rotationTransform.rotation != rotation)
-                {
-                    rotationTransform.rotation = rotation;
-                    _photonView.RPC("SetDirection", RpcTarget.OthersBuffered, angleForward);
-                }
-                _currentDirectionForward = rotationTransform.forward;
-                _currentDirectionRight = rotationTransform.right;
-                inputMove.x = 0;
-                inputMove.y = inputMagnitude;
-            }
-*/
 
             _currentAnimationBlendVector = Vector2.SmoothDamp(
                 _currentAnimationBlendVector,
@@ -330,11 +259,6 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
             _animator.SetFloat(_animatorParameterIdMoveX, _currentAnimationBlendVector.x);
             _animator.SetFloat(_animatorParameterIdMoveZ, _currentAnimationBlendVector.y);
             _animator.SetFloat(_animatorParameterIdRun, 1.0f);
-
-            if (_actionShoot.ReadValue<float>() > 0.5f)
-            {
-                Weapon.FireBullet(_bulletParent, _currentDirectionForward, this);
-            }
         }
         else
         {
@@ -349,19 +273,6 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
         }
     }
 
-    public void onShootAction(InputAction.CallbackContext context)
-    {
-//        _weapon.FireBullet(_bulletParent, forward, this);
-    }
-    /*
-    private void onEnemyStateChange()
-    {
-        if (EnemyTarget.HP <= 0)
-        {
-            EnemyTarget = null;
-        }
-    }*/
-
     public void onTargetAction(InputAction.CallbackContext context)
     {
         if (isMine)
@@ -375,7 +286,7 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
                 EnemyTarget = null;
             }
 
-            _photonView.RPC(
+            photonView.RPC(
                 "SetTarget",
                 RpcTarget.OthersBuffered,
                 EnemyTarget == null ? -1 : EnemyTarget.playerId);
@@ -393,36 +304,22 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
 
     public void OnBulletHit(int damage)
     {
-        int newHP = Mathf.Clamp(HP - damage, 0, maxHP);
-        if (HP != newHP)
-        {
-            Hashtable table = new();
-            table.Add(_networkVariableHP.key, newHP);
-            PhotonNetwork.LocalPlayer.SetCustomProperties(table);
-        }
-    }
-
-    public override void OnPlayerPropertiesUpdate(Player targetPlayer,Hashtable properties)
-    {
-        base.OnPlayerPropertiesUpdate(targetPlayer, properties);
-
-        object value;
-        if (targetPlayer == _photonView.Owner &&
-            properties.TryGetValue(_networkVariableHP.key, out value))
-        {
-            _networkVariableHP.value = value;
-        }
+        _networkVariableHP.LocalSetValue(Mathf.Clamp(HP - damage, 0, maxHP));
     }
 
     private void onStatUpdate()
     {
+        if (_playerState == PlayerState.START)
+        {
+            _playerState = PlayerState.HP_INITIALIZED;
+        }
         statUpdateAction?.Invoke();
     }
 
     [PunRPC]
     public void SetTarget(int playerId)
     {
-        if (!_photonView.IsMine)
+        if (!photonView.IsMine)
         {
             EnemyTarget = GameController.Instance.GetPlayer(playerId);
             if (EnemyTarget == null)
@@ -435,7 +332,7 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
     [PunRPC]
     public void SetDirection(float angle)
     {
-        if (!_photonView.IsMine)
+        if (!photonView.IsMine)
         {
             _currentDirectionAngleNonPlayer = angle;
             if (EnemyTarget == null)
@@ -459,6 +356,29 @@ public class PlayerController : MonoBehaviourPunCallbacks, IPunObservable
         else if (stream.IsReading)
         {
             rotationTransform.rotation = (Quaternion)stream.ReceiveNext();
+        }
+    }
+
+    public void SavePlayerTransform()
+    {
+        PlayerTransform playerTransform = new();
+        playerTransform.x = transform.position.x;
+        playerTransform.z = transform.position.z;
+
+        Vector3 eulerAngles = rotationTransform.rotation.eulerAngles;
+        playerTransform.rotation_x = eulerAngles.x;
+        playerTransform.rotation_y = eulerAngles.y;
+        playerTransform.rotation_z = eulerAngles.z;
+
+        _networkVariablePlayerPosition.LocalSetValue(JsonUtility.ToJson(playerTransform));
+    }
+
+    public void AddCoins(int coins)
+    {
+        if (isMine)
+        {
+            Debug.LogFormat("AddCoins {0}", coins);
+            _networkVariableCoin.LocalSetValue((int)_networkVariableCoin.value + coins);
         }
     }
 }

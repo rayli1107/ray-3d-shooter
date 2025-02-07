@@ -1,25 +1,25 @@
 using Photon.Pun;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using RpcTarget = Photon.Pun.RpcTarget;
 
+[Serializable]
+public class BulletData
+{
+    public int ownerId;
+    public Vector3 velocity;
+    public float duration;
+    public int damage;
+}
+
 public class BulletController : MonoBehaviour
 {
-    [HideInInspector]
-    public Vector3 direction;
-
-    [HideInInspector]
-    public int sourcePlayerClientId;
-
-    [HideInInspector]
-    public int damage;
-
     private MeshRenderer _meshRenderer;
     private PhotonView _photonView;
-    private float _speed = 50f;
-    private float _duration = 3;
+    private BulletData _bulletData;
     private float _timeStart;
 
     private void Awake()
@@ -31,24 +31,24 @@ public class BulletController : MonoBehaviour
     // Start is called before the first frame update
     void Start()
     {
+        _bulletData = JsonUtility.FromJson<BulletData>((string)_photonView.InstantiationData[0]);
+        Debug.LogFormat(
+            "_bulletData playerId {0} velocity {1} damage {2} duration {3}",
+            _bulletData.ownerId,
+            _bulletData.velocity,
+            _bulletData.damage,
+            _bulletData.duration);
         _timeStart = Time.time;
     }
 
     // Update is called once per frame
     void Update()
     {
-        if (!_photonView.IsMine)
-        {
-            return;
-        }
+        transform.position += _bulletData.velocity * Time.deltaTime;
 
-        if (Time.time - _timeStart >= _duration)
+        if (_photonView.IsMine && Time.time - _timeStart >= _bulletData.duration)
         {
             PhotonNetwork.Destroy(gameObject);
-        }
-        else
-        {
-            transform.position += direction * _speed * Time.deltaTime;
         }
     }
 

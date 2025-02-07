@@ -13,7 +13,7 @@ public enum GameState
     GAME_FINISHED
 }
 
-public class GameController : MonoBehaviour
+public class GameController : MonoBehaviourPunCallbacks
 {
     [field: SerializeField]
     public CinemachineVirtualCamera cameraThirdPerson { get; private set; }
@@ -30,36 +30,46 @@ public class GameController : MonoBehaviour
     [SerializeField]
     private Vector2 _startingLocationMax = new Vector2(40f, 40f);
 
+    [SerializeField]
+    private int _maxCoins = 10;
+
+    [SerializeField]
+    private int _coinValue = 10;
 
     public static GameController Instance;
     public System.Random Random { get; private set; }
 
     public PlayerController activePlayer { get; private set; }
     private Dictionary<int, PlayerController> _players;
+    private int _coins;
 
     private void Awake()
     {
         Instance = this;
         Random = new System.Random(Guid.NewGuid().GetHashCode());
         _players = new Dictionary<int, PlayerController>();
+        _coins = 0;
+    }
+
+    private Vector3 getRandomLocation()
+    {
+        float rangeX = _startingLocationMax.x - _startingLocationMin.x;
+        float rangeY = _startingLocationMax.y - _startingLocationMin.y;
+
+        return new Vector3(
+            (float)Random.NextDouble() * rangeX + _startingLocationMin.x,
+            0,
+            (float)Random.NextDouble() * rangeY + _startingLocationMin.y);
     }
 
     public void CreatePlayer()
     {
-        float rangeX = _startingLocationMax.x - _startingLocationMin.x;
-        float rangeY = _startingLocationMax.y - _startingLocationMin.y;
-        
-        Vector3 location = new Vector3(
-            (float)Random.NextDouble() * rangeX + _startingLocationMin.x,
-            0, 
-            (float)Random.NextDouble() * rangeY + _startingLocationMin.y);
-        PhotonNetwork.Instantiate("Player", location, Quaternion.identity);
+        PhotonNetwork.Instantiate("Player", getRandomLocation(), Quaternion.identity);
     }
 
     public void SetActivePlayer(PlayerController player)
     {
         activePlayer = player;
-        UIManager.Instance.WeaponUIController.weapon = player == null ? null : player.Weapon;
         if (cameraThirdPerson != null)
         {
             if (player != null)
@@ -80,6 +90,8 @@ public class GameController : MonoBehaviour
             _cameraAim.Follow = player != null ? player.rotationTransform.transform : null;
             _cameraAim.LookAt = player != null ? player.rotationTransform.transform : null;
         }
+
+        UIManager.Instance.RegisterActivePlayer(player);
     }
 
     public void RegisterPlayer(PlayerController player)
@@ -93,12 +105,7 @@ public class GameController : MonoBehaviour
 
     public void UnregisterPlayer(PlayerController player)
     {
-        Debug.LogFormat("UnregisterPlayer {0} {1}", player.playerId, _players.Count);
         _players.Remove(player.playerId);
-        if (player.isMine)
-        {
-            SetActivePlayer(null);
-        }
     }
 
     public PlayerController GetClosestTarget()
@@ -128,5 +135,61 @@ public class GameController : MonoBehaviour
     public PlayerController GetPlayer(int id)
     {
         return _players.GetValueOrDefault(id, null);
+    }
+
+    public void ManualLeaveRoom()
+    {
+        activePlayer.SavePlayerTransform();
+        PhotonNetworkManager.Instance.LeaveRoom();
+    }
+
+    public void OnActivePlayerDeath()
+    {
+        DestroyActiveGamePlayer();
+        UIManager.Instance.ShowMessageBox(
+            "You Lose!", (_) => PhotonNetworkManager.Instance.LeaveRoom(), true);
+    }
+
+    public override void OnJoinedRoom()
+    {
+        base.OnJoinedRoom();
+        Debug.Log("GameController.OnJoinedRoom()");
+        CreatePlayer();
+        InvokeRepeating(nameof(spawnCoin), 1, 5);
+    }
+
+    public override void OnLeftRoom()
+    {
+        base.OnLeftRoom();
+        CancelInvoke(nameof(spawnCoin));
+    }
+
+    private void spawnCoin()
+    {
+        if (PhotonNetworkManager.Instance.IsRoomMaster() && _coins < _maxCoins)
+        {
+            Debug.Log("spawnCoin");
+
+            object[] objectData = new object[1];
+            objectData[0] = _coinValue;
+            PhotonNetwork.InstantiateRoomObject("Coin", getRandomLocation(), Quaternion.identity, 0, objectData);
+        }
+    }
+
+    public void OnCoinCreate()
+    {
+        ++_coins;
+    }
+
+    public void OnCoinDestroy()
+    {
+        --_coins;
+    }
+
+    public void DestroyActiveGamePlayer()
+    {
+        PhotonView playerPhotonView = activePlayer.photonView;
+        SetActivePlayer(null);
+        PhotonNetwork.Destroy(playerPhotonView);
     }
 }

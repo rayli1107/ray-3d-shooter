@@ -10,7 +10,7 @@ using UnityEngine.UI;
 public class LobbyPanel : MonoBehaviour
 {
     [SerializeField]
-    private TMP_InputField _inputPlayerName;
+    private TextMeshProUGUI _labelPlayerName;
 
     [SerializeField]
     private TMP_InputField _inputCreateRoomName;
@@ -23,53 +23,39 @@ public class LobbyPanel : MonoBehaviour
 
     private void OnEnable()
     {
+        _labelPlayerName.text = string.Format("Player Name: {0}", PhotonNetwork.NickName);
         SetSelectionPanel(null);
     }
 
     public void SetSelectionPanel(RoomSelectionPanel panel)
     {
-        Debug.LogFormat("SetSelectionPanel {0}", panel);
         _selectedPanel = panel;
         foreach (KeyValuePair<string, RoomSelectionPanel> entry in _roomSelectionPanels)
         {
-            Debug.LogFormat("  Checking {0} {1}", entry.Value, entry.Value == panel);
             entry.Value.selected = entry.Value == panel;
         }
     }
 
     public void OnCreateRoomButton()
     {
-        if (_inputPlayerName.text.Length == 0)
-        {
-            UIManager.Instance.ShowMessageBox("Please enter player name.", null, true, false);
-            return;
-        }
         if (_inputCreateRoomName.text.Length == 0)
         {
             UIManager.Instance.ShowMessageBox("Please enter room name.", null, true, false);
             return;
         }
 
-        PhotonNetwork.LocalPlayer.NickName = _inputPlayerName.text;
-        PhotonNetwork.CreateRoom(_inputCreateRoomName.text);
+        PhotonNetworkManager.Instance.CreateRoom(_inputCreateRoomName.text);
     }
 
     public void OnJoinRoomButton()
     {
-        if (_inputPlayerName.text.Length == 0)
-        {
-            UIManager.Instance.ShowMessageBox("Please enter player name.", null, true, false);
-            return;
-        }
-
         if (_selectedPanel == null)
         {
             UIManager.Instance.ShowMessageBox("Please select a room.", null, true, false);
             return;
         }
 
-        PhotonNetwork.LocalPlayer.NickName = _inputPlayerName.text;
-        PhotonNetwork.JoinRoom(_selectedPanel.roomName);
+        PhotonNetworkManager.Instance.JoinRoom(_selectedPanel.roomName);
     }
 
     public void ClearRoomSelectionPanels()
@@ -86,19 +72,16 @@ public class LobbyPanel : MonoBehaviour
         _roomSelectionPanels.Clear();
     }
 
-    public void AddRoomSelectionPanel(string roomName)
+    public void AddRoomSelectionPanel(RoomInfo roomInfo)
     {
-        if (_roomSelectionPanels.ContainsKey(roomName))
-        {
-            return;
+        if (!_roomSelectionPanels.TryGetValue(roomInfo.Name, out RoomSelectionPanel panel)) {
+            panel = Instantiate(
+                _prefabRoomSelectionPanel, _prefabRoomSelectionPanel.transform.parent);
+            panel.selected = false;
+            panel.gameObject.SetActive(true);
+            _roomSelectionPanels[roomInfo.Name] = panel;
         }
-
-        RoomSelectionPanel panel = Instantiate(
-            _prefabRoomSelectionPanel, _prefabRoomSelectionPanel.transform.parent);
-        panel.selected = false;
-        panel.roomName = roomName;
-        panel.gameObject.SetActive(true);
-        _roomSelectionPanels[roomName] = panel;
+        panel.SetRoomInfo(roomInfo);
     }
 
     public void RemoveRoomSelectionPanel(string roomName)
@@ -112,5 +95,10 @@ public class LobbyPanel : MonoBehaviour
             Destroy(panel.gameObject);
             _roomSelectionPanels.Remove(roomName);
         }
+    }
+
+    public void OnLogOutButton()
+    {
+        PhotonNetworkManager.Instance.Disconnect();
     }
 }

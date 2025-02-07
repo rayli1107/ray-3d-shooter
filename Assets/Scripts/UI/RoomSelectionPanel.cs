@@ -15,16 +15,19 @@ public class RoomSelectionPanel : ModalObject
     [SerializeField]
     private Image _imageBackground;
 
-    public string roomName
-    {
-        get => _textRoomName.text;
-        set { _textRoomName.text = value; }
-    }
+    public string roomName { get; private set; }
 
     public bool selected
     {
         get => _imageBackground.enabled;
         set { _imageBackground.enabled = value; }
+    }
+
+    public void SetRoomInfo(RoomInfo roomInfo)
+    {
+        roomName = roomInfo.Name;
+        _textRoomName.text = string.Format(
+            "{0} {1} / {2}", roomInfo.Name, roomInfo.PlayerCount, roomInfo.MaxPlayers);
     }
 
     public void OnSelect()

@@ -13,6 +13,10 @@ public class UIManager : MonoBehaviour
     private BaseMessageBox _panelMessageBox;
 
     [field: SerializeField]
+    public PlayerUIController ActivePlayerUIController { get; private set; }
+
+
+    [field: SerializeField]
     public WeaponUIController WeaponUIController { get; private set; }
 
     [field: SerializeField]
@@ -20,6 +24,9 @@ public class UIManager : MonoBehaviour
 
     [field: SerializeField]
     public LoginPanel LoginPanel { get; private set; }
+
+    [field: SerializeField]
+    public WeaponPurchasePanel WeaponPurchasePanel { get; private set; }
 
     [field: SerializeField]
     public ModalObject GameMenu { get; private set; }
@@ -30,6 +37,7 @@ public class UIManager : MonoBehaviour
 
     private PlayerInput _playerInput;
     private InputAction _actionEscape;
+    private InputAction _actionWeaponShop;
 
     private void Awake()
     {
@@ -37,6 +45,7 @@ public class UIManager : MonoBehaviour
         _modalObjects = new List<ModalObject>();
         _playerInput = GetComponent<PlayerInput>();
         _actionEscape = _playerInput.actions["Escape"];
+        _actionWeaponShop = _playerInput.actions["Weapon Shop"];
     }
 
     // Start is called before the first frame update
@@ -56,6 +65,18 @@ public class UIManager : MonoBehaviour
             else if (PhotonNetworkManager.Instance.inRoom)
             {
                 GameMenu.gameObject.SetActive(true);
+            }
+        }
+        else if (_actionWeaponShop.triggered)
+        {
+            if (_modalObjects.Count > 0)
+            {
+                ModalObject topObject = _modalObjects[_modalObjects.Count - 1];
+                if (topObject == WeaponPurchasePanel) topObject.OnCancel();
+            }
+            else if (GameController.Instance.activePlayer != null)
+            {
+                WeaponPurchasePanel.gameObject.SetActive(true);
             }
         }
     }
@@ -109,6 +130,7 @@ public class UIManager : MonoBehaviour
         if (ok)
         {
             GameMenu.gameObject.SetActive(false);
+            GameController.Instance.DestroyActiveGamePlayer();
             PhotonNetworkManager.Instance.LeaveRoom();
         }
     }
@@ -116,6 +138,23 @@ public class UIManager : MonoBehaviour
     public void OnGameMenuExitGame()
     {
         ShowMessageBox("Return to lobby?", exitGameMessageBoxHandler, true, true);
+    }
+
+    public void RegisterActivePlayer(PlayerController playerController)
+    {
+        WeaponPurchasePanel.RegisterActivePlayer(playerController);
+        if (playerController == null)
+        {
+            ActivePlayerUIController.gameObject.SetActive(false);
+            WeaponPurchasePanel.gameObject.SetActive(false);
+            WeaponUIController.weaponManager = null;
+        }
+        else
+        {
+            ActivePlayerUIController.player = playerController;
+            ActivePlayerUIController.gameObject.SetActive(true);
+            WeaponUIController.weaponManager = playerController.GetComponent<PlayerWeaponManager>();
+        }
     }
 }
 

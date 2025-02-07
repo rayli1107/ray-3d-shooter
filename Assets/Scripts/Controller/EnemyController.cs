@@ -106,7 +106,7 @@ public class EnemyController : MonoBehaviour
         MaxHP = maxHP;
         HP = maxHP;
         EnemyState = EnemyState.IDLE;
-        _weapon.Initialize();
+//        _weapon.Initialize();
     }
 
     public void OnBulletHit(int damage)
@@ -190,7 +190,7 @@ public class EnemyController : MonoBehaviour
 
         if (_enemyState != EnemyState.APPROACHING)
         {
-            _weapon.FireBullet(_bulletParent, _selfRotation.forward, null);
+//            _weapon.FireBullet(_bulletParent, _selfRotation.forward, null);
         }
     }
 }

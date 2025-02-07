@@ -1,8 +1,6 @@
+using ExitGames.Client.Photon;
 using Photon.Pun;
 using System;
-using System.Collections;
-using System.Collections.Generic;
-using Unity.Netcode;
 using UnityEngine;
 
 public enum WeaponState
@@ -15,41 +13,66 @@ public enum WeaponState
 
 public class WeaponController : MonoBehaviour
 {
-    [SerializeField]
-    private int _maxBullets = 7;
-    public int MaxBullets => _maxBullets;
+    [field: SerializeField]
+    public string weaponName { get; private set; }
+
+    [field: SerializeField]
+    public int weaponCost { get; private set; }
+
+
+    [field: SerializeField]
+    public Sprite weaponSprite { get; private set; }
+
+    [field: SerializeField]
+    public int maxBullets { get; private set; }
+
+    [field: SerializeField]
+    public float reloadDuration { get; private set; }
+
+    [field: SerializeField]
+    public float recoilDuration { get; private set; }
 
     [SerializeField]
-    private float _reloadDuration = 2f;
-    public float ReloadDuration => _reloadDuration;
+    public int _bulletDamage = 1;
 
     [SerializeField]
-    private float _recoilDuration = 0.3f;
+    public float _bulletSpeed = 150f;
+
     [SerializeField]
-    private int _bulletDamage;
+    public float _bulletDuration = 1f;
+
     [SerializeField]
-    private BulletController _prefabBullet;
+    public float _bulletSprayDegrees = 5f;
+
+    [SerializeField]
+    public int _bulletCount = 1;
+
+
     [SerializeField]
     private Transform _barrel;
+
+    [field: SerializeField]
+    public PlayerController player { get; private set; }
+
+    [field: SerializeField]
+    public PlayerWeaponManager playerWeaponManager { get; private set; }
+
+    [field: SerializeField]
+    public Transform rightHandGripHint { get; private set; }
+
+    [field: SerializeField]
+    public Transform leftHandGripHint { get; private set; }
+
+    [HideInInspector]
+    public int weaponIndex;
 
     private Animator _animator;
     private int _animatorParameterIdFire;
     private int _animatorReadyState;
-    private Transform _cameraMainTransform;
     public WeaponState WeaponState { get; private set; }
 
     public float ReloadStartTime { get; private set; }
 
-    private int _currentBullets;
-    public int CurrentBullets
-    {
-        get => _currentBullets;
-        private set
-        {
-            _currentBullets = value;
-            Action?.Invoke();
-        }
-    }
 
     private float _recoilStartTime;
 
@@ -59,36 +82,55 @@ public class WeaponController : MonoBehaviour
     {
         _animator = null;
         _animatorParameterIdFire = Animator.StringToHash("Fire");
-        _cameraMainTransform = Camera.main.transform;
     }
 
-    public void Initialize()
-    {
-        CurrentBullets = MaxBullets;
-        WeaponState = WeaponState.READY;
-    }
 
-    public void FireBullet(Transform parent, Vector3 direction, PlayerController sourcePlayer)
+    private void OnEnable()
     {
-        if (WeaponState != WeaponState.READY || CurrentBullets == 0)
+        if (player.photonView.IsMine)
         {
-            return;
+            int bulletCount = playerWeaponManager.GetBulletCount(weaponIndex);
+            if (bulletCount == 0)
+            {
+                ReloadStartTime = Time.time;
+                WeaponState = WeaponState.RELOAD;
+            }
+            else
+            {
+                WeaponState = WeaponState.READY;
+            }
+            Debug.LogFormat("Weapon.OnEnable {0} {1} {2}", weaponName, bulletCount, WeaponState);
         }
+    }
 
-        GameObject bulletObject = PhotonNetwork.Instantiate(
-            "Bullet", _barrel.transform.position, Quaternion.identity);
-        BulletController bulletController = bulletObject.GetComponent<BulletController>();
-        bulletController.direction = direction;
-        bulletController.sourcePlayerClientId = sourcePlayer.playerId;
-        bulletController.damage = _bulletDamage;
+    public void FireBullet(Vector3 direction)
+    {
+        direction = new Vector3(direction.x, 0, direction.z).normalized;
+        Vector3 direction_right = Vector3.Cross(direction, Vector3.up);
+        float delta = Mathf.Tan(Mathf.Deg2Rad * _bulletSprayDegrees);
+        for (int i = 0; i < _bulletCount; ++i)
+        {
+            float deltaX = delta * ((float)GameController.Instance.Random.NextDouble() * 2 - 1);
+            float deltaY = delta * ((float)GameController.Instance.Random.NextDouble() * 2 - 1);
+            Vector3 newDirection = direction + deltaX * direction_right + deltaY * Vector3.up;
 
+            BulletData bulletData = new();
+            bulletData.ownerId = player.playerId;
+            bulletData.velocity = _bulletSpeed * newDirection.normalized;
+            bulletData.damage = _bulletDamage;
+            bulletData.duration = _bulletDuration;
+            object[] objectData = new object[1];
+            objectData[0] = JsonUtility.ToJson(bulletData);
+
+            PhotonNetwork.Instantiate(
+                "Bullet", _barrel.transform.position, Quaternion.identity, 0, objectData);
+        }
         if (_animator != null) {
             _animatorReadyState = _animator.GetCurrentAnimatorStateInfo(0).shortNameHash;
             _animator.SetTrigger(_animatorParameterIdFire);
         }
 
-        --CurrentBullets;
-        if (CurrentBullets > 0)
+        if (playerWeaponManager.GetBulletCount(weaponIndex) > 0)
         {
             WeaponState = WeaponState.PRE_RECOIL;
         }
@@ -101,6 +143,11 @@ public class WeaponController : MonoBehaviour
 
     private void Update()
     {
+        if (!player.photonView.IsMine)
+        {
+            return;
+        }
+
         switch (WeaponState)
         {
             case WeaponState.PRE_RECOIL:
@@ -114,7 +161,7 @@ public class WeaponController : MonoBehaviour
             case WeaponState.RECOIL:
                 if (_animator == null)
                 {
-                    if (Time.time - _recoilStartTime > _recoilDuration)
+                    if (Time.time - _recoilStartTime > recoilDuration)
                     {
                         WeaponState = WeaponState.READY;
                     }
@@ -129,9 +176,9 @@ public class WeaponController : MonoBehaviour
                 break;
 
             case WeaponState.RELOAD:
-                if (Time.time - ReloadStartTime >= ReloadDuration)
+                if (Time.time - ReloadStartTime >= reloadDuration)
                 {
-                    CurrentBullets = MaxBullets;
+                    playerWeaponManager.ReloadWeapon(weaponIndex);
                     WeaponState = WeaponState.READY;
                 }
                 break;
